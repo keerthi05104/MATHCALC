@@ -6,6 +6,7 @@ import { Server } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
 import { GameEngine, MODES } from './game.js';
 
+
 const app = express();
 const server = http.createServer(app);
 const origin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
