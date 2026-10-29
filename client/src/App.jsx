@@ -62,15 +62,8 @@ export default function App() {
     const onUpdate = s => { setState(s); setRemaining(s.remainingMs ?? 60000); };
     const onFeedback = f => { if (f.playerId === player.id) setFeedback(f.correct ? { kind: 'good', text: 'Correct! Nice work.' } : { kind: 'bad', text: 'Not quite — try again.' }); };
     const onFinished = r => { setResults(r); setPage('results'); setState(null); setAnswer(''); };
-    socket.on('lobby:update', onLobby);
-    socket.on('game:started', onStarted);
-    socket.on('game:update', onUpdate);
-    socket.on('answer:feedback', onFeedback);
-    socket.on('game:finished', onFinished);
-    socket.on('matchmaking:found', onMatchFound);
-     socket.on('matchmaking:error', onMatchmakingError); 
-     
-    const onMatchFound = ({ state: matchedState }) => {
+    
+const onMatchFound = ({ state: matchedState }) => {
   setState(matchedState);
   setRoomCode(matchedState.code);
   setMatchmakingStatus('');
@@ -83,6 +76,15 @@ const onMatchmakingError = ({ message }) => {
   setPage('modes');
   setToast(message || 'Matchmaking failed. Please try again.');
 };
+
+socket.on('lobby:update', onLobby);
+socket.on('game:started', onStarted);
+socket.on('game:update', onUpdate);
+socket.on('answer:feedback', onFeedback);
+socket.on('game:finished', onFinished);
+socket.on('matchmaking:found', onMatchFound);
+socket.on('matchmaking:error', onMatchmakingError);
+
 return () => {
   socket.off('lobby:update', onLobby);
   socket.off('game:started', onStarted);
@@ -238,3 +240,4 @@ return () => {
     {toast&&<div className="toast" role="status">{toast}<button onClick={()=>setToast('')}><X size={14}/></button></div>}
   </div>;
 }
+
