@@ -39,6 +39,7 @@ export default function App() {
   const [results, setResults] = useState(null);
   const [toast, setToast] = useState('');
   const [busy, setBusy] = useState(false);
+  const [matchmakingStatus, setMatchmakingStatus] = useState('');
 
   const player = session?.user
     ? { id: session.user.id, name: session.user.user_metadata?.display_name || session.user.email?.split('@')[0] || 'Player' }
@@ -66,7 +67,32 @@ export default function App() {
     socket.on('game:update', onUpdate);
     socket.on('answer:feedback', onFeedback);
     socket.on('game:finished', onFinished);
-    return () => { socket.off('lobby:update', onLobby); socket.off('game:started', onStarted); socket.off('game:update', onUpdate); socket.off('answer:feedback', onFeedback); socket.off('game:finished', onFinished); socket.disconnect(); };
+    socket.on('matchmaking:found', onMatchFound);
+     socket.on('matchmaking:error', onMatchmakingError); 
+     
+    const onMatchFound = ({ state: matchedState }) => {
+  setState(matchedState);
+  setRoomCode(matchedState.code);
+  setMatchmakingStatus('');
+  setPage('lobby');
+  setToast('Players found! Starting your match…');
+};
+
+const onMatchmakingError = ({ message }) => {
+  setMatchmakingStatus('');
+  setPage('modes');
+  setToast(message || 'Matchmaking failed. Please try again.');
+};
+return () => {
+  socket.off('lobby:update', onLobby);
+  socket.off('game:started', onStarted);
+  socket.off('game:update', onUpdate);
+  socket.off('answer:feedback', onFeedback);
+  socket.off('game:finished', onFinished);
+  socket.off('matchmaking:found', onMatchFound);
+  socket.off('matchmaking:error', onMatchmakingError);
+  socket.disconnect();
+}; 
   }, [session?.access_token, player.id, player.name]);
 
   useEffect(() => {
