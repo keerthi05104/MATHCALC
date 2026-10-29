@@ -17,11 +17,17 @@ export class GameEngine {
     this.persistMatch = persistMatch;
   }
 
-  createRoom({ mode, difficulty = 'easy', player }) {
-    if (!MODES[mode]) throw new Error('Invalid game mode');
+createRoom({ mode, difficulty = 'easy', player, ranked = false }) {    if (!MODES[mode]) throw new Error('Invalid game mode');
     const code = this.#roomCode();
     const room = {
-      code, mode, difficulty, status: 'lobby', createdAt: now(), startedAt: null, endsAt: null,
+  code,
+  mode,
+  difficulty,
+  ranked: Boolean(ranked),
+  status: 'lobby',
+  createdAt: now(),
+  startedAt: null,
+  endsAt: null,
       players: new Map(), used: new Set(), question: null, questionSequence: 0, timer: null,
       questionLog: [], scoringEvents: [], matchSaved: false
     };
@@ -164,8 +170,11 @@ export class GameEngine {
   snapshot(room) {
     const race = MODES[room.mode]?.kind === 'race';
     return {
-      code: room.code, mode: room.mode, modeLabel: MODES[room.mode]?.label, difficulty: room.difficulty,
-      status: room.status, requiredPlayers: MODES[room.mode]?.players,
+code: room.code,
+mode: room.mode,
+modeLabel: MODES[room.mode]?.label,
+difficulty: room.difficulty,
+ranked: Boolean(room.ranked),status: room.status, requiredPlayers: MODES[room.mode]?.players,
       startedAt: room.startedAt, endsAt: room.endsAt, remainingMs: room.status === 'active' ? Math.max(0, room.endsAt - now()) : null,
       question: race && room.question ? publicQuestion(room.question) : null,
       players: [...room.players.values()].map(p => ({
