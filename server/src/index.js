@@ -60,8 +60,167 @@ async function authenticateSocket(socket, next) {
   next();
 }
 io.use(authenticateSocket);
+// Random matchmaking queues, separated by mode and difficulty.
+const matchmakingQueues = new Map();
+const queuedPlayers = new Map();
+
+function removeFromMatchmaking(playerId) {
+  const entry = queuedPlayers.get(String(playerId));
+  if (!entry) return false;
+
+  queuedPlayers.delete(String(playerId));
+
+  const queue = matchmakingQueues.get(entry.key);
+  if (queue) {
+    const remaining = queue.filter(
+      item => item.player.id !== String(playerId)
+    );
+
+    if (remaining.length) {
+      matchmakingQueues.set(entry.key, remaining);
+    } else {
+      matchmakingQueues.delete(entry.key);
+    }
+  }
+
+  return true;
+}
+
+function findActiveRoom(playerId) {
+  return [...engine.rooms.values()].find(room =>
+    room.players.has(String(playerId)) &&
+    (room.status === 'lobby' || room.status === 'active')
+  );
+}
+
+function joinMatchmaking(socket, payload = {}) {
+  const { mode, difficulty = 'easy' } = payload;
+  const player = socket.data.player;
+
+  if (!MODES[mode]) {
+    throw new Error('Select a valid game mode.');
+  }
+
+  if (
+    typeof difficulty !== 'string' ||
+    difficulty.length < 1 ||
+    difficulty.length > 32
+  ) {
+    throw new Error('Select a valid difficulty.');
+  }
+
+  const existing = queuedPlayers.get(String(player.id));
+
+  if (existing && existing.socketId !== socket.id) {
+    throw new Error('This player is already searching in another connection.');
+  }
+
+  if (existing && existing.key === `${mode}:${difficulty}`) {
+    return { ok: true, status: 'waiting' };
+  }
+
+  if (existing) removeFromMatchmaking(player.id);
+
+  if (findActiveRoom(player.id)) {
+    throw new Error('Leave your current room before searching for a match.');
+  }
+
+  const key = `${mode}:${difficulty}`;
+  const queue = matchmakingQueues.get(key) || [];
+
+  // Remove stale entries and never pair the same player ID with itself.
+  const candidateIndex = queue.findIndex(item =>
+    item.player.id !== player.id &&
+    io.sockets.sockets.has(item.socketId)
+  );
+
+  if (candidateIndex === -1) {
+    queue.push({
+      socketId: socket.id,
+      player,
+      key
+    });
+
+    matchmakingQueues.set(key, queue);
+    queuedPlayers.set(String(player.id), {
+      socketId: socket.id,
+      key
+    });
+
+    socket.data.matchmakingKey = key;
+
+    return { ok: true, status: 'waiting' };
+  }
+
+  const [opponent] = queue.splice(candidateIndex, 1);
+
+  if (queue.length) {
+    matchmakingQueues.set(key, queue);
+  } else {
+    matchmakingQueues.delete(key);
+  }
+
+  queuedPlayers.delete(String(opponent.player.id));
+  socket.data.matchmakingKey = null;
+  opponent.socketId && (
+    io.sockets.sockets.get(opponent.socketId).data.matchmakingKey = null
+  );
+
+  // Reuse the existing engine and room lifecycle.
+  const opponentSocket = io.sockets.sockets.get(opponent.socketId);
+
+  if (!opponentSocket || opponent.player.id === player.id) {
+    return joinMatchmaking(socket, payload);
+  }
+
+  const roomState = engine.createRoom({
+    mode,
+    difficulty,
+    player: opponent.player
+  });
+
+  const code = roomState.code;
+  engine.joinRoom(code, player);
+
+  const sockets = [opponentSocket, socket];
+
+  for (const member of sockets) {
+    member.join(code);
+    member.data.matchmakingRoom = code;
+
+    member.emit('matchmaking:found', {
+      code,
+      state: engine.getRoom(code)
+    });
+  }
+
+  // The existing engine starts only after all required players are ready.
+  for (const member of sockets) {
+    engine.setReady(code, member.data.player.id, true);
+  }
+
+  return { ok: true, status: 'matched', code };
+}
 
 io.on('connection', socket => {
+    socket.on('matchmaking:join', (payload, ack = () => {}) => {
+    try {
+      ack(joinMatchmaking(socket, payload));
+    } catch (error) {
+      ack({ ok: false, error: error.message });
+    }
+  });
+
+  socket.on('matchmaking:cancel', (_payload, ack = () => {}) => {
+    const entry = queuedPlayers.get(String(socket.data.player.id));
+
+    if (entry && entry.socketId === socket.id) {
+      removeFromMatchmaking(socket.data.player.id);
+      socket.data.matchmakingKey = null;
+    }
+
+    ack({ ok: true, cancelled: true });
+  });
   socket.on('room:create', ({ mode, difficulty }, ack = () => {}) => {
     try {
       const state = engine.createRoom({ mode, difficulty, player: socket.data.player });
@@ -94,6 +253,11 @@ io.on('connection', socket => {
   });
   socket.on('disconnect', () => {
     // Keep active players in the room for reconnection; they are marked disconnected.
+         const entry = queuedPlayers.get(String(socket.data.player.id));
+
+    if (entry && entry.socketId === socket.id) {
+      removeFromMatchmaking(socket.data.player.id);
+    }
     for (const [code, room] of engine.rooms) if (room.players.has(socket.data.player.id)) {
       try { engine.leaveRoom(code, socket.data.player.id); } catch {}
     }
