@@ -437,7 +437,8 @@ function joinMatchmaking(socket, payload = {}) {
   const roomState = engine.createRoom({
     mode,
     difficulty,
-    player: opponent.player
+    player: opponent.player,
+    ranked: true
   });
 
   const code = roomState.code;
@@ -463,14 +464,6 @@ function joinMatchmaking(socket, payload = {}) {
   return { ok: true, status: 'matched', code };
 }
 
-io.on('connection', socket => {
-    socket.on('matchmaking:join', (payload, ack = () => {}) => {
-    try {
-      ack(joinMatchmaking(socket, payload));
-    } catch (error) {
-      ack({ ok: false, error: error.message });
-    }
-  });
 
   
 socket.on('matchmaking:join', async (payload, ack = () => {}) => {
