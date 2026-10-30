@@ -1,3 +1,4 @@
+
 import 'dotenv/config';
 import http from 'node:http';
 import express from 'express';
@@ -6,6 +7,9 @@ import { Server } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
 import { GameEngine, MODES } from './game.js';
 
+// --------------------------------------------------
+// WEEK START CALCULATION (INDIAN STANDARD TIME)
+// --------------------------------------------------
 
 function getWeekStartIST() {
   const now = new Date();
@@ -23,7 +27,7 @@ function getWeekStartIST() {
       .map(part => [part.type, Number(part.value)])
   );
 
-  // Build midnight IST for today's date, represented as UTC.
+  // Midnight IST represented as a UTC timestamp.
   const todayIST = Date.UTC(
     values.year,
     values.month - 1,
@@ -32,7 +36,11 @@ function getWeekStartIST() {
     -30
   );
 
-  const weekday = new Date(todayIST).getUTCDay();
+  // Calculate weekday using the actual IST calendar date.
+  const weekday = new Date(
+    Date.UTC(values.year, values.month - 1, values.day)
+  ).getUTCDay();
+
   const daysSinceMonday = (weekday + 6) % 7;
 
   return new Date(
@@ -40,37 +48,81 @@ function getWeekStartIST() {
   ).toISOString();
 }
 
+// --------------------------------------------------
+// EXPRESS SERVER
+// --------------------------------------------------
+
 const app = express();
 const server = http.createServer(app);
+
 const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'https://solverway.vercel.app',
   'https://mathcalc-git-fix-security-audit-keerthi05104.vercel.app',
   'https://mathcalc-cpn2cswsw-keerthi05104.vercel.app',
+
   ...(process.env.CLIENT_ORIGIN || '')
     .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean),
+    .map(origin => origin.trim())
+    .filter(Boolean)
 ];
 
 app.use(cors({
   origin: allowedOrigins,
-  credentials: true,
+  credentials: true
 }));
+
 app.use(express.json({ limit: '32kb' }));
+
+// --------------------------------------------------
+// SUPABASE CONFIGURATION
+// --------------------------------------------------
+
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+
+const supabase =
+  supabaseUrl && supabaseKey
+    ? createClient(supabaseUrl, supabaseKey)
+    : null;
+
+// --------------------------------------------------
+// SOCKET.IO CONFIGURATION
+// --------------------------------------------------
+
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
     credentials: true,
-    methods: ['GET', 'POST'],
-  },
+    methods: ['GET', 'POST']
+  }
 });
-app.get('/health', (_req, res) => res.json({ ok: true, service: 'arithmetic-arena', time: new Date().toISOString() }));
-app.get('/api/modes', (_req, res) => res.json(Object.entries(MODES).map(([id, mode]) => ({ id, ...mode }))));
+
+// --------------------------------------------------
+// BASIC API ROUTES
+// --------------------------------------------------
+
+app.get('/health', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'arithmetic-arena',
+    time: new Date().toISOString()
+  });
+});
+
+app.get('/api/modes', (_req, res) => {
+  res.json(
+    Object.entries(MODES).map(([id, mode]) => ({
+      id,
+      ...mode
+    }))
+  );
+});
+
+// --------------------------------------------------
+// WEEKLY LEADERBOARD
+// --------------------------------------------------
 
 app.get('/api/leaderboard/weekly', async (_req, res) => {
   try {
@@ -93,7 +145,11 @@ app.get('/api/leaderboard/weekly', async (_req, res) => {
 
     for (const event of events || []) {
       const id = event.player_id;
-      totals.set(id, (totals.get(id) || 0) + event.rating_change);
+
+      totals.set(
+        id,
+        (totals.get(id) || 0) + event.rating_change
+      );
     }
 
     const playerIds = [...totals.keys()];
@@ -136,48 +192,104 @@ app.get('/api/leaderboard/weekly', async (_req, res) => {
       timezone: 'Asia/Kolkata',
       leaderboard
     });
+
   } catch (error) {
-    console.error('Weekly leaderboard failed:', error.message);
+    console.error(
+      'Weekly leaderboard failed:',
+      error.message
+    );
+
     return res.status(500).json({
       error: 'Unable to load the weekly leaderboard.'
     });
   }
 });
 
+// --------------------------------------------------
+// CURRENT USER API
+// --------------------------------------------------
+
 app.get('/api/me', async (req, res) => {
-  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (!token || !process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) return res.status(401).json({ error: 'Authentication required' });
-  const client = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-  const { data, error } = await client.auth.getUser(token);
-  if (error || !data.user) return res.status(401).json({ error: 'Invalid session' });
-  res.json({ id: data.user.id, email: data.user.email });
+  try {
+    const token = (req.headers.authorization || '')
+      .replace(/^Bearer\s+/i, '');
+
+    if (
+      !token ||
+      !process.env.SUPABASE_URL ||
+      !process.env.SUPABASE_ANON_KEY
+    ) {
+      return res.status(401).json({
+        error: 'Authentication required'
+      });
+    }
+
+    const client = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY
+    );
+
+    const { data, error } = await client.auth.getUser(token);
+
+    if (error || !data.user) {
+      return res.status(401).json({
+        error: 'Invalid session'
+      });
+    }
+
+    return res.json({
+      id: data.user.id,
+      email: data.user.email
+    });
+
+  } catch (error) {
+    console.error('User authentication failed:', error.message);
+
+    return res.status(500).json({
+      error: 'Unable to verify user.'
+    });
+  }
 });
 
+// --------------------------------------------------
+// GAME ENGINE
+// --------------------------------------------------
 
 const engine = new GameEngine({
-  onEvent: (room, event, data) => io.to(room).emit(event, data),
+
+  onEvent: (room, event, data) => {
+    io.to(room).emit(event, data);
+  },
 
   persistMatch: async (room, result) => {
+
     if (!supabase) {
-      console.warn('Match not saved: Supabase service-role client is not configured.');
+      console.warn(
+        'Match not saved: Supabase service-role client is not configured.'
+      );
       return;
     }
 
-    // The database requires UUIDs. Guest/private games can still run,
-    // but matches with non-UUID player IDs cannot be persisted here.
     const players = result.players;
+
+    // Validate UUIDs before inserting into the database.
     const isUuid = value =>
       typeof value === 'string' &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
-    if (!players.length || !players.every(player => isUuid(player.id))) {
-      console.warn(`Match ${room.code} not saved: one or more player IDs are not UUIDs.`);
+    if (
+      !players.length ||
+      !players.every(player => isUuid(player.id))
+    ) {
+      console.warn(
+        `Match ${room.code} not saved: one or more player IDs are not UUIDs.`
+      );
       return;
     }
 
     const isRanked = Boolean(room.ranked);
 
-    // Ranked matches require every player to have an existing profile.
+    // Ranked matches require existing player profiles.
     if (isRanked) {
       const { data: profiles, error: profileError } = await supabase
         .from('profiles')
@@ -186,14 +298,22 @@ const engine = new GameEngine({
 
       if (profileError) throw profileError;
 
-      const profileIds = new Set((profiles || []).map(profile => profile.id));
+      const profileIds = new Set(
+        (profiles || []).map(profile => profile.id)
+      );
+
       if (players.some(player => !profileIds.has(player.id))) {
-        throw new Error('Cannot rate this match: a participant profile is missing.');
+        throw new Error(
+          'Cannot rate this match: a participant profile is missing.'
+        );
       }
     }
 
-    const winner = players.find(player => player.outcome === 'win');
+    const winner = players.find(
+      player => player.outcome === 'win'
+    );
 
+    // Save match.
     const { data: savedMatch, error: matchError } = await supabase
       .from('matches')
       .insert({
@@ -201,9 +321,11 @@ const engine = new GameEngine({
         status: 'finished',
         player_ids: players.map(player => player.id),
         winner_id: winner?.id ?? null,
+
         started_at: room.startedAt
           ? new Date(room.startedAt).toISOString()
           : null,
+
         ended_at: new Date(room.finishedAt).toISOString(),
         rated: isRanked
       })
@@ -212,11 +334,12 @@ const engine = new GameEngine({
 
     if (matchError) throw matchError;
 
-    // Private matches are saved as match history but do not affect ratings.
+    // Private matches are saved without rating changes.
     if (!isRanked) return;
 
     const changes = players.map(player => ({
       player_id: player.id,
+
       rating_change:
         player.outcome === 'win' ? 10 :
         player.outcome === 'loss' ? -8 : 0
@@ -235,22 +358,34 @@ const engine = new GameEngine({
         `Match ${room.code} was saved, but rating updates failed:`,
         ratingError.message
       );
+
       throw ratingError;
     }
 
-    console.log(`Saved match ${room.code}; ranked ratings applied.`);
+    console.log(
+      `Saved match ${room.code}; ranked ratings applied.`
+    );
   }
 });
 
-
+// --------------------------------------------------
+// SOCKET AUTHENTICATION
+// --------------------------------------------------
 
 async function authenticateSocket(socket, next) {
   try {
     const token = socket.handshake.auth?.token;
 
+    // Authenticated player.
     if (token) {
-      if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
-        return next(new Error('Authentication service is not configured.'));
+
+      if (
+        !process.env.SUPABASE_URL ||
+        !process.env.SUPABASE_ANON_KEY
+      ) {
+        return next(
+          new Error('Authentication service is not configured.')
+        );
       }
 
       const client = createClient(
@@ -265,26 +400,37 @@ async function authenticateSocket(socket, next) {
       }
 
       const user = data.user;
+
       const name =
         user.user_metadata?.display_name ||
         user.user_metadata?.full_name ||
         user.email?.split('@')[0] ||
         'Player';
-      const avatar = user.user_metadata?.avatar_url || null;
 
-      // Create a profile only if one does not already exist.
-      // The service-role client is used only on the backend.
+      const avatar =
+        user.user_metadata?.avatar_url || null;
+
+      // Initialize profile if it does not exist.
       if (supabase) {
         const { error: profileError } = await supabase
           .from('profiles')
           .upsert(
             { id: user.id },
-            { onConflict: 'id', ignoreDuplicates: true }
+            {
+              onConflict: 'id',
+              ignoreDuplicates: true
+            }
           );
 
         if (profileError) {
-          console.error('Profile initialization failed:', profileError.message);
-          return next(new Error('Unable to initialize player profile.'));
+          console.error(
+            'Profile initialization failed:',
+            profileError.message
+          );
+
+          return next(
+            new Error('Unable to initialize player profile.')
+          );
         }
       }
 
@@ -298,6 +444,7 @@ async function authenticateSocket(socket, next) {
       return next();
     }
 
+    // Guest player.
     if (process.env.ALLOW_GUESTS === 'false') {
       return next(new Error('Sign in required'));
     }
@@ -308,33 +455,48 @@ async function authenticateSocket(socket, next) {
 
     socket.data.player = {
       id: guestId,
-      name: String(socket.handshake.auth?.name || 'Guest').slice(0, 32),
+      name: String(
+        socket.handshake.auth?.name || 'Guest'
+      ).slice(0, 32),
       avatar: null,
       authenticated: false
     };
 
     return next();
+
   } catch (error) {
-    console.error('Socket authentication failed:', error.message);
+    console.error(
+      'Socket authentication failed:',
+      error.message
+    );
+
     return next(new Error('Authentication failed.'));
   }
 }
 
 io.use(authenticateSocket);
-// Random matchmaking queues, separated by mode and difficulty.
+
+// --------------------------------------------------
+// MATCHMAKING QUEUES
+// --------------------------------------------------
+
 const matchmakingQueues = new Map();
 const queuedPlayers = new Map();
 
+// Remove a player from the matchmaking queue.
 function removeFromMatchmaking(playerId) {
-  const entry = queuedPlayers.get(String(playerId));
+  const id = String(playerId);
+  const entry = queuedPlayers.get(id);
+
   if (!entry) return false;
 
-  queuedPlayers.delete(String(playerId));
+  queuedPlayers.delete(id);
 
   const queue = matchmakingQueues.get(entry.key);
+
   if (queue) {
     const remaining = queue.filter(
-      item => item.player.id !== String(playerId)
+      item => item.player.id !== id
     );
 
     if (remaining.length) {
@@ -347,16 +509,32 @@ function removeFromMatchmaking(playerId) {
   return true;
 }
 
+// Find an existing active room for a player.
 function findActiveRoom(playerId) {
   return [...engine.rooms.values()].find(room =>
     room.players.has(String(playerId)) &&
-    (room.status === 'lobby' || room.status === 'active')
+    (
+      room.status === 'lobby' ||
+      room.status === 'active'
+    )
   );
 }
 
+// --------------------------------------------------
+// RANDOM MATCHMAKING
+// --------------------------------------------------
+
 function joinMatchmaking(socket, payload = {}) {
-  const { mode, difficulty = 'easy' } = payload;
+  const {
+    mode,
+    difficulty = 'easy'
+  } = payload || {};
+
   const player = socket.data.player;
+
+  if (!player) {
+    throw new Error('Player authentication required.');
+  }
 
   if (!MODES[mode]) {
     throw new Error('Select a valid game mode.');
@@ -370,70 +548,122 @@ function joinMatchmaking(socket, payload = {}) {
     throw new Error('Select a valid difficulty.');
   }
 
-  const existing = queuedPlayers.get(String(player.id));
+  const playerId = String(player.id);
+  const key = `${mode}:${difficulty}`;
+
+  const existing = queuedPlayers.get(playerId);
 
   if (existing && existing.socketId !== socket.id) {
-    throw new Error('This player is already searching in another connection.');
+    throw new Error(
+      'This player is already searching in another connection.'
+    );
   }
 
-  if (existing && existing.key === `${mode}:${difficulty}`) {
-    return { ok: true, status: 'waiting' };
+  if (existing && existing.key === key) {
+    return {
+      ok: true,
+      status: 'waiting'
+    };
   }
 
-  if (existing) removeFromMatchmaking(player.id);
-
-  if (findActiveRoom(player.id)) {
-    throw new Error('Leave your current room before searching for a match.');
+  if (existing) {
+    removeFromMatchmaking(playerId);
   }
 
-  const key = `${mode}:${difficulty}`;
+  if (findActiveRoom(playerId)) {
+    throw new Error(
+      'Leave your current room before searching for a match.'
+    );
+  }
+
+  // Get the queue for the selected mode and difficulty.
   const queue = matchmakingQueues.get(key) || [];
 
-  // Remove stale entries and never pair the same player ID with itself.
-  const candidateIndex = queue.findIndex(item =>
-    item.player.id !== player.id &&
-    io.sockets.sockets.has(item.socketId)
-  );
+  // Remove disconnected or outdated queue entries.
+  const validQueue = [];
 
-  if (candidateIndex === -1) {
-    queue.push({
-      socketId: socket.id,
-      player,
-      key
-    });
+  for (const item of queue) {
+    const opponentId = String(item.player.id);
+    const opponentSocket = io.sockets.sockets.get(item.socketId);
+    const opponentEntry = queuedPlayers.get(opponentId);
 
-    matchmakingQueues.set(key, queue);
-    queuedPlayers.set(String(player.id), {
+    const isValid =
+      opponentSocket &&
+      opponentEntry &&
+      opponentEntry.socketId === item.socketId &&
+      opponentEntry.key === key &&
+      opponentId !== playerId &&
+      !findActiveRoom(opponentId);
+
+    if (isValid) {
+      validQueue.push(item);
+    } else if (
+      opponentEntry &&
+      opponentEntry.socketId === item.socketId
+    ) {
+      queuedPlayers.delete(opponentId);
+
+      if (opponentSocket) {
+        opponentSocket.data.matchmakingKey = null;
+      }
+    }
+  }
+
+  if (validQueue.length) {
+    matchmakingQueues.set(key, validQueue);
+  } else {
+    matchmakingQueues.delete(key);
+  }
+
+  // No opponent available: add player to queue.
+  if (validQueue.length === 0) {
+    matchmakingQueues.set(key, [
+      {
+        socketId: socket.id,
+        player,
+        key
+      }
+    ]);
+
+    queuedPlayers.set(playerId, {
       socketId: socket.id,
       key
     });
 
     socket.data.matchmakingKey = key;
 
-    return { ok: true, status: 'waiting' };
+    return {
+      ok: true,
+      status: 'waiting'
+    };
   }
 
-  const [opponent] = queue.splice(candidateIndex, 1);
+  // Match with the first available opponent.
+  const opponent = validQueue.shift();
 
-  if (queue.length) {
-    matchmakingQueues.set(key, queue);
+  if (validQueue.length) {
+    matchmakingQueues.set(key, validQueue);
   } else {
     matchmakingQueues.delete(key);
   }
 
-  queuedPlayers.delete(String(opponent.player.id));
-  socket.data.matchmakingKey = null;
-  opponent.socketId && (
-    io.sockets.sockets.get(opponent.socketId).data.matchmakingKey = null
+  const opponentSocket = io.sockets.sockets.get(
+    opponent.socketId
   );
 
-  // Reuse the existing engine and room lifecycle.
-  const opponentSocket = io.sockets.sockets.get(opponent.socketId);
+  // Defensive check before creating the room.
+  if (!opponentSocket) {
+    queuedPlayers.delete(String(opponent.player.id));
 
-  if (!opponentSocket || opponent.player.id === player.id) {
     return joinMatchmaking(socket, payload);
   }
 
+  queuedPlayers.delete(String(opponent.player.id));
+
+  socket.data.matchmakingKey = null;
+  opponentSocket.data.matchmakingKey = null;
+
+  // Create a ranked game room.
   const roomState = engine.createRoom({
     mode,
     difficulty,
@@ -442,10 +672,15 @@ function joinMatchmaking(socket, payload = {}) {
   });
 
   const code = roomState.code;
+
   engine.joinRoom(code, player);
 
-  const sockets = [opponentSocket, socket];
+  const sockets = [
+    opponentSocket,
+    socket
+  ];
 
+  // Join both players to the Socket.IO room.
   for (const member of sockets) {
     member.join(code);
     member.data.matchmakingRoom = code;
@@ -456,70 +691,295 @@ function joinMatchmaking(socket, payload = {}) {
     });
   }
 
-  // The existing engine starts only after all required players are ready.
+  // Mark both players ready.
   for (const member of sockets) {
-    engine.setReady(code, member.data.player.id, true);
+    engine.setReady(
+      code,
+      member.data.player.id,
+      true
+    );
   }
 
-  return { ok: true, status: 'matched', code };
+  return {
+    ok: true,
+    status: 'matched',
+    code
+  };
 }
 
+// --------------------------------------------------
+// SOCKET CONNECTION AND EVENTS
+// --------------------------------------------------
 
-  
-socket.on('matchmaking:join', async (payload, ack = () => {}) => {
-  try {
-    const result = await joinMatchmaking(socket, payload);
-    ack(result);
-  } catch (error) {
-    ack({
-      ok: false,
-      error: error.message || 'Unable to join matchmaking.'
-    });
-  }
+io.on('connection', (socket) => {
+
+  console.log(
+    `Player connected: ${socket.id}`
+  );
+
+  // ----------------------------------------------
+  // MATCHMAKING JOIN
+  // ----------------------------------------------
+
+  socket.on(
+    'matchmaking:join',
+    (payload, ack = () => {}) => {
+      try {
+        const result = joinMatchmaking(
+          socket,
+          payload
+        );
+
+        ack(result);
+
+      } catch (error) {
+        ack({
+          ok: false,
+          error:
+            error.message ||
+            'Unable to join matchmaking.'
+        });
+      }
+    }
+  );
+
+  // ----------------------------------------------
+  // CREATE ROOM
+  // ----------------------------------------------
+
+  socket.on(
+    'room:create',
+    (payload = {}, ack = () => {}) => {
+      try {
+        removeFromMatchmaking(socket.data.player.id);
+
+        const {
+          mode,
+          difficulty
+        } = payload || {};
+
+        const state = engine.createRoom({
+          mode,
+          difficulty,
+          player: socket.data.player
+        });
+
+        socket.join(state.code);
+
+        ack({
+          ok: true,
+          state
+        });
+
+      } catch (error) {
+        ack({
+          ok: false,
+          error: error.message
+        });
+      }
+    }
+  );
+
+  // ----------------------------------------------
+  // JOIN ROOM
+  // ----------------------------------------------
+
+  socket.on(
+    'room:join',
+    (payload = {}, ack = () => {}) => {
+      try {
+        removeFromMatchmaking(socket.data.player.id);
+
+        const { code } = payload || {};
+
+        const state = engine.joinRoom(
+          code,
+          socket.data.player
+        );
+
+        socket.join(state.code);
+
+        ack({
+          ok: true,
+          state
+        });
+
+      } catch (error) {
+        ack({
+          ok: false,
+          error: error.message
+        });
+      }
+    }
+  );
+
+  // ----------------------------------------------
+  // PLAYER READY
+  // ----------------------------------------------
+
+  socket.on(
+    'room:ready',
+    (payload = {}, ack = () => {}) => {
+      try {
+        const {
+          code,
+          ready
+        } = payload || {};
+
+        const state = engine.setReady(
+          code,
+          socket.data.player.id,
+          ready
+        );
+
+        ack({
+          ok: true,
+          state
+        });
+
+      } catch (error) {
+        ack({
+          ok: false,
+          error: error.message
+        });
+      }
+    }
+  );
+
+  // ----------------------------------------------
+  // ROOM STATE
+  // ----------------------------------------------
+
+  socket.on(
+    'room:state',
+    (payload = {}, ack = () => {}) => {
+      try {
+        const { code } = payload || {};
+
+        ack({
+          ok: true,
+          state: engine.getRoom(code)
+        });
+
+      } catch (error) {
+        ack({
+          ok: false,
+          error: error.message
+        });
+      }
+    }
+  );
+
+  // ----------------------------------------------
+  // SUBMIT ANSWER
+  // ----------------------------------------------
+
+  socket.on(
+    'answer:submit',
+    (payload, ack = () => {}) => {
+      try {
+        if (
+          !payload ||
+          typeof payload.code !== 'string'
+        ) {
+          return ack({
+            accepted: false,
+            reason: 'invalid_payload'
+          });
+        }
+
+        const result = engine.submitAnswer({
+          ...payload,
+          playerId: socket.data.player.id
+        });
+
+        ack(result);
+
+      } catch (error) {
+        ack({
+          accepted: false,
+          reason: error.message
+        });
+      }
+    }
+  );
+
+  // ----------------------------------------------
+  // LEAVE ROOM
+  // ----------------------------------------------
+
+  socket.on(
+    'room:leave',
+    (payload = {}) => {
+      try {
+        const { code } = payload || {};
+
+        engine.leaveRoom(
+          code,
+          socket.data.player.id
+        );
+
+        socket.leave(code);
+        socket.data.matchmakingRoom = null;
+
+      } catch (error) {
+        console.error(
+          'Room leave failed:',
+          error.message
+        );
+      }
+    }
+  );
+
+  // ----------------------------------------------
+  // DISCONNECT
+  // ----------------------------------------------
+
+  socket.on('disconnect', () => {
+
+    const playerId = String(
+      socket.data.player.id
+    );
+
+    console.log(
+      `Player disconnected: ${socket.id}`
+    );
+
+    // Remove disconnected player from matchmaking.
+    const entry = queuedPlayers.get(playerId);
+
+    if (
+      entry &&
+      entry.socketId === socket.id
+    ) {
+      removeFromMatchmaking(playerId);
+    }
+
+    // Notify the game engine about room disconnection.
+    for (const [code, room] of engine.rooms) {
+      if (room.players.has(playerId)) {
+        try {
+          engine.leaveRoom(code, playerId);
+        } catch (error) {
+          console.error(
+            'Room disconnect handling failed:',
+            error.message
+          );
+        }
+      }
+    }
+  });
+
 });
 
-  socket.on('room:create', ({ mode, difficulty }, ack = () => {}) => {
-    try {
-      const state = engine.createRoom({ mode, difficulty, player: socket.data.player });
-      socket.join(state.code);
-      ack({ ok: true, state });
-    } catch (e) { ack({ ok: false, error: e.message }); }
-  });
-  socket.on('room:join', ({ code }, ack = () => {}) => {
-    try {
-      const state = engine.joinRoom(code, socket.data.player);
-      socket.join(state.code);
-      ack({ ok: true, state });
-    } catch (e) { ack({ ok: false, error: e.message }); }
-  });
-  socket.on('room:ready', ({ code, ready }, ack = () => {}) => {
-    try { const state = engine.setReady(code, socket.data.player.id, ready); ack({ ok: true, state }); }
-    catch (e) { ack({ ok: false, error: e.message }); }
-  });
-  socket.on('room:state', ({ code }, ack = () => {}) => {
-    try { ack({ ok: true, state: engine.getRoom(code) }); } catch (e) { ack({ ok: false, error: e.message }); }
-  });
-  socket.on('answer:submit', (payload, ack = () => {}) => {
-    try {
-      if (!payload || typeof payload.code !== 'string') return ack({ accepted: false, reason: 'invalid_payload' });
-      ack(engine.submitAnswer({ ...payload, playerId: socket.data.player.id }));
-    } catch (e) { ack({ accepted: false, reason: e.message }); }
-  });
-  socket.on('room:leave', ({ code }) => {
-    try { engine.leaveRoom(code, socket.data.player.id); socket.leave(code); } catch {}
-  });
-  socket.on('disconnect', () => {
-    // Keep active players in the room for reconnection; they are marked disconnected.
-         const entry = queuedPlayers.get(String(socket.data.player.id));
-
-    if (entry && entry.socketId === socket.id) {
-      removeFromMatchmaking(socket.data.player.id);
-    }
-    for (const [code, room] of engine.rooms) if (room.players.has(socket.data.player.id)) {
-      try { engine.leaveRoom(code, socket.data.player.id); } catch {}
-    }
-  });
-
+// --------------------------------------------------
+// START SERVER
+// --------------------------------------------------
 
 const port = Number(process.env.PORT || 4000);
-server.listen(port, () => console.log(`SOLVER API listening on ${port}`));
+
+server.listen(port, () => {
+  console.log(
+    `SOLVER API listening on ${port}`
+  );
+});
