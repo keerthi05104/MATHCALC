@@ -519,7 +519,7 @@ socket.on('matchmaking:join', async (payload, ack = () => {}) => {
       try { engine.leaveRoom(code, socket.data.player.id); } catch {}
     }
   });
-});
+
 
 const port = Number(process.env.PORT || 4000);
 server.listen(port, () => console.log(`SOLVER API listening on ${port}`));
