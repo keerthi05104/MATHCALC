@@ -93,6 +93,9 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   const [leaderboardError, setLeaderboardError] = useState('');
+  const [profileData, setProfileData] = useState(null);
+const [profileLoading, setProfileLoading] = useState(false);
+const [profileError, setProfileError] = useState('');
 
   const player = session?.user
     ? {
@@ -129,6 +132,42 @@ export default function App() {
     }
   }, []);
 
+  const loadProfile = useCallback(async () => {
+  if (!session?.access_token) {
+    setProfileData(null);
+    setProfileError('');
+    return;
+  }
+
+  setProfileLoading(true);
+  setProfileError('');
+
+  try {
+    const response = await fetch(`${API}/api/me/stats`, {
+      headers: {
+        Authorization: `Bearer ${session.access_token}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.error || 'Unable to load your statistics.'
+      );
+    }
+
+    setProfileData(data);
+  } catch (error) {
+    setProfileError(
+      error.message || 'Unable to load your statistics.'
+    );
+  } finally {
+    setProfileLoading(false);
+  }
+}, [session?.access_token]);
+
+
   // Restore the Supabase authentication session.
   useEffect(() => {
     if (!supabase) return undefined;
@@ -147,6 +186,13 @@ export default function App() {
 
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  // Load persistent statistics whenever the profile page opens.
+useEffect(() => {
+  if (page === 'profile' && session?.access_token) {
+    loadProfile();
+  }
+}, [page, session?.access_token, loadProfile]);
 
   // Connect the game socket and register event listeners.
   useEffect(() => {
@@ -1437,11 +1483,93 @@ export default function App() {
               </button>
             )}
 
+           {session && (
+  <>
+    {profileLoading && (
+      <p className="hint-text">Loading your statistics...</p>
+    )}
+
+    {profileError && (
+      <p className="hint-text" role="alert">
+        {profileError}
+      </p>
+    )}
+
+    {profileData && (
+      <>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: '12px',
+            marginTop: '24px'
+          }}
+        >
+          {[
+            ['Rating', profileData.profile.rating],
+            ['Total matches', profileData.profile.totalMatches],
+            ['Wins', profileData.profile.wins],
+            ['Losses', profileData.profile.losses]
+          ].map(([label, value]) => (
+            <div className="setup-card" key={label}>
+              <p className="hint-text">{label}</p>
+              <h2>{value}</h2>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: '28px' }}>
+          <h2>Recent matches</h2>
+
+          {profileData.matches.length === 0 ? (
             <p className="hint-text">
-              Persistent statistics and match history require a configured
-              Supabase project and authenticated profile. The current game
-              session still shows match results.
+              No completed matches have been saved yet.
             </p>
+          ) : (
+            <div style={{ display: 'grid', gap: '12px' }}>
+              {profileData.matches.map(match => (
+                <div
+                  className="setup-card"
+                  key={match.id}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '12px'
+                  }}
+                >
+                  <div>
+                    <strong>
+                      {match.mode.replaceAll('_', ' ')}
+                    </strong>
+
+                    <p className="hint-text">
+                      {match.ended_at
+                        ? new Date(match.ended_at).toLocaleString()
+                        : 'Date unavailable'}
+                    </p>
+
+                    <p className="hint-text">
+                      {match.rated ? 'Ranked match' : 'Unranked match'}
+                    </p>
+                  </div>
+
+                  <strong>
+                    {match.outcome === 'win'
+                      ? 'Won'
+                      : match.outcome === 'loss'
+                        ? 'Lost'
+                        : 'Draw'}
+                  </strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </>
+    )}
+  </>
+)}
           </div>
         </main>
       )}

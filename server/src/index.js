@@ -250,6 +250,117 @@ app.get('/api/me', async (req, res) => {
     });
   }
 });
+// --------------------------------------------------
+// CURRENT USER STATISTICS AND MATCH HISTORY
+// --------------------------------------------------
+
+app.get('/api/me/stats', async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(503).json({
+        error: 'Statistics service is unavailable.'
+      });
+    }
+
+    const token = (req.headers.authorization || '')
+      .replace(/^Bearer\s+/i, '');
+
+    if (!token) {
+      return res.status(401).json({
+        error: 'Authentication required.'
+      });
+    }
+
+    if (
+      !process.env.SUPABASE_URL ||
+      !process.env.SUPABASE_ANON_KEY
+    ) {
+      return res.status(503).json({
+        error: 'Authentication service is not configured.'
+      });
+    }
+
+    // Verify the access token and identify the current user.
+    const authClient = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY
+    );
+
+    const { data: authData, error: authError } =
+      await authClient.auth.getUser(token);
+
+    if (authError || !authData.user) {
+      return res.status(401).json({
+        error: 'Invalid session.'
+      });
+    }
+
+    const userId = authData.user.id;
+
+    // Retrieve the player's profile and completed matches.
+    const [profileResult, matchesResult] = await Promise.all([
+      supabase
+        .from('profiles')
+        .select('id, username, avatar_url, rating, wins, losses')
+        .eq('id', userId)
+        .maybeSingle(),
+
+      supabase
+        .from('matches')
+        .select(
+          'id, mode, status, winner_id, started_at, ended_at, rated',
+          { count: 'exact' }
+        )
+        .contains('player_ids', [userId])
+        .not('ended_at', 'is', null)
+        .order('ended_at', { ascending: false })
+        .limit(20)
+    ]);
+
+    if (profileResult.error) {
+      throw profileResult.error;
+    }
+
+    if (matchesResult.error) {
+      throw matchesResult.error;
+    }
+
+    const profile = profileResult.data;
+    const matches = (matchesResult.data || []).map(match => ({
+      ...match,
+      outcome:
+        match.winner_id === userId
+          ? 'win'
+          : match.winner_id
+            ? 'loss'
+            : 'draw'
+    }));
+
+    return res.json({
+      profile: {
+        id: userId,
+        email: authData.user.email,
+        username: profile?.username || null,
+        avatarUrl: profile?.avatar_url || null,
+        rating: profile?.rating ?? 2000,
+        wins: profile?.wins ?? 0,
+        losses: profile?.losses ?? 0,
+        totalMatches: matchesResult.count ?? 0
+      },
+      matches
+    });
+
+  } catch (error) {
+    console.error(
+      'Profile statistics failed:',
+      error.message
+    );
+
+    return res.status(500).json({
+      error: 'Unable to load profile statistics.'
+    });
+  }
+});
 
 // --------------------------------------------------
 // GAME ENGINE
